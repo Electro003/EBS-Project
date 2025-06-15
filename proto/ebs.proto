@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package ebs;
+option go_package = "ebs-project/pkg/ebs";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+message Publication {
+  string station_id = 1;
+  string city = 2;
+  int32 temp = 3;
+  double rain = 4;
+  int32 wind = 5;
+  string direction = 6;
+  string date = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message Value {
+  oneof value_type {
+    string string_value = 1;
+    int32 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+  }
+}
+
+message Constraint {
+  string field = 1;
+  string operator = 2;
+  Value value = 3;
+}
+
+message SimpleSubscription {
+  string subscription_id = 1;
+  string subscriber_id = 2;
+  repeated Constraint constraints = 3;
+}
+
+message ComplexSubscription {
+  string subscription_id = 1;
+  string subscriber_id = 2;
+  Constraint identity_constraint = 3;
+  repeated Constraint aggregate_constraints = 4;
+}
+
+message MetaPublication {
+    string city = 1;
+    string message = 2;
+}
+
+message Notification {
+  oneof content {
+    Publication publication = 1;
+    MetaPublication meta_publication = 2;
+  }
+  google.protobuf.Timestamp dispatched_at = 3;
+}
+
+message SubscriptionStreamRequest {
+    string subscriber_id = 1;
+}
+
+service BrokerService {
+  rpc Publish(Publication) returns (google.protobuf.Empty) {}
+
+  rpc RegisterSimpleSubscription(SimpleSubscription) returns (google.protobuf.Empty) {}
+  rpc RegisterComplexSubscription(ComplexSubscription) returns (google.protobuf.Empty) {}
+
+  rpc ForwardSimpleSubscription(SimpleSubscription) returns (google.protobuf.Empty) {}
+  rpc ForwardComplexSubscription(ComplexSubscription) returns (google.protobuf.Empty) {}
+  
+  rpc Subscribe(SubscriptionStreamRequest) returns (stream Notification) {}
+}

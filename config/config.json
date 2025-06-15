@@ -1,0 +1,33 @@
+{
+  "brokerAddresses": [
+    "localhost:50051",
+    "localhost:50052",
+    "localhost:50053"
+  ],
+  "routingKeyField": "city",
+  "windowSize": 10,
+  "publicationIntervalMs": 10,
+  "evaluationDurationSeconds": 180,
+  "totalSubscriptionsToGenerate": 10000,
+  "publicationValues": {
+    "stationIdRange": { "min": 1, "max": 100 },
+    "cities": ["Bucharest", "London", "Paris", "Tokyo", "New York", "Iasi", "Cluj", "Berlin"],
+    "tempRange": { "min": -20, "max": 40 },
+    "rainRange": { "min": 0.0, "max": 5.0 },
+    "windRange": { "min": 0, "max": 100 },
+    "directions": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+  },
+  "subscriptionConfig": {
+    "fieldFrequencies": [
+      { "name": "city", "frequency": 0.9 },
+      { "name": "temp", "frequency": 0.8 },
+      { "name": "wind", "frequency": 0.75 }
+    ],
+    "equalityOperatorFrequency": {
+      "fieldName": "city",
+      "frequency": 0.25
+    },
+    "complexSubscriptionChance": 0.2,
+    "aggregateFields": ["temp", "wind"]
+  }
+}
