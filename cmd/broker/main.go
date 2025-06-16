@@ -50,17 +50,12 @@ func newServer(addr string, cfg *config.Config) *brokerServer {
 		windowSize:           cfg.WindowSize,
 		subscriberStreams:    make(map[string]pb.BrokerService_SubscribeServer),
 	}
-
-	// Start initial connection attempts
 	s.connectToPeers()
-
-	// Start background reconnection manager
 	s.startPeerConnectionManager()
 
 	return s
 }
 
-// Initial connection attempt
 func (s *brokerServer) connectToPeers() {
 	for _, addr := range s.allBrokerAddresses {
 		if addr == s.address {
@@ -70,17 +65,14 @@ func (s *brokerServer) connectToPeers() {
 	}
 }
 
-// Connect to a specific peer and notify them
 func (s *brokerServer) connectToPeer(addr string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if already connected
 	if _, ok := s.brokerClients[addr]; ok {
 		return true
 	}
 
-	// Try to connect
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Printf("[%s] Failed to connect to peer broker %s: %v", s.address, addr, err)
@@ -92,13 +84,11 @@ func (s *brokerServer) connectToPeer(addr string) bool {
 	s.brokerConnections[addr] = conn
 	log.Printf("[%s] Connected to peer broker %s", s.address, addr)
 
-	// Notify the peer about our existence
 	go s.notifyPeer(addr, client)
 
 	return true
 }
 
-// Notify peer broker about our connection
 func (s *brokerServer) notifyPeer(peerAddr string, client pb.BrokerServiceClient) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -116,12 +106,10 @@ func (s *brokerServer) notifyPeer(peerAddr string, client pb.BrokerServiceClient
 	}
 }
 
-// Handle peer connection notification
 func (s *brokerServer) NotifyPeerConnection(ctx context.Context, req *pb.PeerInfo) (*emptypb.Empty, error) {
 	peerAddr := req.Address
 	log.Printf("[%s] Received connection notification from peer %s", s.address, peerAddr)
 
-	// Establish reverse connection if we don't have one
 	s.mu.RLock()
 	_, hasConnection := s.brokerClients[peerAddr]
 	s.mu.RUnlock()
@@ -134,7 +122,6 @@ func (s *brokerServer) NotifyPeerConnection(ctx context.Context, req *pb.PeerInf
 	return &emptypb.Empty{}, nil
 }
 
-// Background manager to handle reconnections
 func (s *brokerServer) startPeerConnectionManager() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -159,7 +146,6 @@ func (s *brokerServer) startPeerConnectionManager() {
 	}()
 }
 
-// Get or create connection to peer
 func (s *brokerServer) getPeerClient(addr string) (pb.BrokerServiceClient, error) {
 	s.mu.RLock()
 	client, ok := s.brokerClients[addr]
@@ -169,7 +155,6 @@ func (s *brokerServer) getPeerClient(addr string) (pb.BrokerServiceClient, error
 		return client, nil
 	}
 
-	// Try to connect
 	if s.connectToPeer(addr) {
 		s.mu.RLock()
 		client = s.brokerClients[addr]

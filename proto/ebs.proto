@@ -79,6 +79,5 @@ service BrokerService {
   
   rpc Subscribe(SubscriptionStreamRequest) returns (stream Notification) {}
   
-  // New RPC for peer notification
   rpc NotifyPeerConnection(PeerInfo) returns (google.protobuf.Empty) {}
 }
