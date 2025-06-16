@@ -2,7 +2,7 @@ package generator
 
 import (
 	"EBS-PROJECT/config"
-	pb "EBS-PROJECT/proto"
+	pb "EBS-PROJECT/ebs-project/pkg/ebs"
 	"fmt"
 	"math/rand"
 )

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"EBS-PROJECT/config"
+	pb "EBS-PROJECT/ebs-project/pkg/ebs"
 	"EBS-PROJECT/internal/generator"
-	pb "EBS-PROJECT/proto"
 	"EBS-PROJECT/routing"
 
 	"google.golang.org/grpc"

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"EBS-PROJECT/config"
+	pb "EBS-PROJECT/ebs-project/pkg/ebs"
 	"EBS-PROJECT/internal/generator"
-	pb "EBS-PROJECT/proto"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"

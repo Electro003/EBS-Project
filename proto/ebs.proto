@@ -62,6 +62,12 @@ message SubscriptionStreamRequest {
     string subscriber_id = 1;
 }
 
+// New message for peer connection
+message PeerInfo {
+    string address = 1;
+    google.protobuf.Timestamp connected_at = 2;
+}
+
 service BrokerService {
   rpc Publish(Publication) returns (google.protobuf.Empty) {}
 
@@ -72,4 +78,7 @@ service BrokerService {
   rpc ForwardComplexSubscription(ComplexSubscription) returns (google.protobuf.Empty) {}
   
   rpc Subscribe(SubscriptionStreamRequest) returns (stream Notification) {}
+  
+  // New RPC for peer notification
+  rpc NotifyPeerConnection(PeerInfo) returns (google.protobuf.Empty) {}
 }

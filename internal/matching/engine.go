@@ -1,7 +1,7 @@
 package matching
 
 import (
-	pb "EBS-PROJECT/proto"
+	pb "EBS-PROJECT/ebs-project/pkg/ebs"
 	"log"
 	"strings"
 )

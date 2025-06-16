@@ -26,22 +26,21 @@ const (
 	BrokerService_ForwardSimpleSubscription_FullMethodName   = "/ebs.BrokerService/ForwardSimpleSubscription"
 	BrokerService_ForwardComplexSubscription_FullMethodName  = "/ebs.BrokerService/ForwardComplexSubscription"
 	BrokerService_Subscribe_FullMethodName                   = "/ebs.BrokerService/Subscribe"
+	BrokerService_NotifyPeerConnection_FullMethodName        = "/ebs.BrokerService/NotifyPeerConnection"
 )
 
 // BrokerServiceClient is the client API for BrokerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BrokerServiceClient interface {
-	// Publisher-ul trimite o publicatie (doar la broker-ul proprietar)
 	Publish(ctx context.Context, in *Publication, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// Subscriber-ul inregistreaza subscriptii la broker-ul sau
 	RegisterSimpleSubscription(ctx context.Context, in *SimpleSubscription, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	RegisterComplexSubscription(ctx context.Context, in *ComplexSubscription, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// Metode folosite pentru comunicarea interna intre brokeri
 	ForwardSimpleSubscription(ctx context.Context, in *SimpleSubscription, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ForwardComplexSubscription(ctx context.Context, in *ComplexSubscription, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// Subscriber-ul deschide un canal pentru a primi notificari
 	Subscribe(ctx context.Context, in *SubscriptionStreamRequest, opts ...grpc.CallOption) (BrokerService_SubscribeClient, error)
+	// New RPC for peer notification
+	NotifyPeerConnection(ctx context.Context, in *PeerInfo, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type brokerServiceClient struct {
@@ -135,20 +134,28 @@ func (x *brokerServiceSubscribeClient) Recv() (*Notification, error) {
 	return m, nil
 }
 
+func (c *brokerServiceClient) NotifyPeerConnection(ctx context.Context, in *PeerInfo, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BrokerService_NotifyPeerConnection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrokerServiceServer is the server API for BrokerService service.
 // All implementations must embed UnimplementedBrokerServiceServer
 // for forward compatibility
 type BrokerServiceServer interface {
-	// Publisher-ul trimite o publicatie (doar la broker-ul proprietar)
 	Publish(context.Context, *Publication) (*emptypb.Empty, error)
-	// Subscriber-ul inregistreaza subscriptii la broker-ul sau
 	RegisterSimpleSubscription(context.Context, *SimpleSubscription) (*emptypb.Empty, error)
 	RegisterComplexSubscription(context.Context, *ComplexSubscription) (*emptypb.Empty, error)
-	// Metode folosite pentru comunicarea interna intre brokeri
 	ForwardSimpleSubscription(context.Context, *SimpleSubscription) (*emptypb.Empty, error)
 	ForwardComplexSubscription(context.Context, *ComplexSubscription) (*emptypb.Empty, error)
-	// Subscriber-ul deschide un canal pentru a primi notificari
 	Subscribe(*SubscriptionStreamRequest, BrokerService_SubscribeServer) error
+	// New RPC for peer notification
+	NotifyPeerConnection(context.Context, *PeerInfo) (*emptypb.Empty, error)
 	mustEmbedUnimplementedBrokerServiceServer()
 }
 
@@ -173,6 +180,9 @@ func (UnimplementedBrokerServiceServer) ForwardComplexSubscription(context.Conte
 }
 func (UnimplementedBrokerServiceServer) Subscribe(*SubscriptionStreamRequest, BrokerService_SubscribeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
+}
+func (UnimplementedBrokerServiceServer) NotifyPeerConnection(context.Context, *PeerInfo) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NotifyPeerConnection not implemented")
 }
 func (UnimplementedBrokerServiceServer) mustEmbedUnimplementedBrokerServiceServer() {}
 
@@ -298,6 +308,24 @@ func (x *brokerServiceSubscribeServer) Send(m *Notification) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _BrokerService_NotifyPeerConnection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PeerInfo)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).NotifyPeerConnection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_NotifyPeerConnection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).NotifyPeerConnection(ctx, req.(*PeerInfo))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BrokerService_ServiceDesc is the grpc.ServiceDesc for BrokerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -324,6 +352,10 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ForwardComplexSubscription",
 			Handler:    _BrokerService_ForwardComplexSubscription_Handler,
+		},
+		{
+			MethodName: "NotifyPeerConnection",
+			Handler:    _BrokerService_NotifyPeerConnection_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
