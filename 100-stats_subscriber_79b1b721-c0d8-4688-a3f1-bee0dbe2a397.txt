@@ -1,0 +1,6 @@
+--- STATS for 79b1b721-c0d8-4688-a3f1-bee0dbe2a397 at 2025-06-17T10:33:04+03:00 ---
+Total simple notifications received: 275962
+Total complex notifications received: 67962
+Average latency: 2.215379ms
+--------------------------------------------------
+

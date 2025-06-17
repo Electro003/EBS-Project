@@ -27,6 +27,8 @@ const (
 	BrokerService_ForwardComplexSubscription_FullMethodName  = "/ebs.BrokerService/ForwardComplexSubscription"
 	BrokerService_Subscribe_FullMethodName                   = "/ebs.BrokerService/Subscribe"
 	BrokerService_NotifyPeerConnection_FullMethodName        = "/ebs.BrokerService/NotifyPeerConnection"
+	BrokerService_ForwardNotification_FullMethodName         = "/ebs.BrokerService/ForwardNotification"
+	BrokerService_Unsubscribe_FullMethodName                 = "/ebs.BrokerService/Unsubscribe"
 )
 
 // BrokerServiceClient is the client API for BrokerService service.
@@ -39,8 +41,9 @@ type BrokerServiceClient interface {
 	ForwardSimpleSubscription(ctx context.Context, in *SimpleSubscription, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ForwardComplexSubscription(ctx context.Context, in *ComplexSubscription, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Subscribe(ctx context.Context, in *SubscriptionStreamRequest, opts ...grpc.CallOption) (BrokerService_SubscribeClient, error)
-	// New RPC for peer notification
 	NotifyPeerConnection(ctx context.Context, in *PeerInfo, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ForwardNotification(ctx context.Context, in *ForwardedNotification, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Unsubscribe(ctx context.Context, in *UnsubscribeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type brokerServiceClient struct {
@@ -144,6 +147,26 @@ func (c *brokerServiceClient) NotifyPeerConnection(ctx context.Context, in *Peer
 	return out, nil
 }
 
+func (c *brokerServiceClient) ForwardNotification(ctx context.Context, in *ForwardedNotification, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BrokerService_ForwardNotification_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *brokerServiceClient) Unsubscribe(ctx context.Context, in *UnsubscribeRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BrokerService_Unsubscribe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrokerServiceServer is the server API for BrokerService service.
 // All implementations must embed UnimplementedBrokerServiceServer
 // for forward compatibility
@@ -154,8 +177,9 @@ type BrokerServiceServer interface {
 	ForwardSimpleSubscription(context.Context, *SimpleSubscription) (*emptypb.Empty, error)
 	ForwardComplexSubscription(context.Context, *ComplexSubscription) (*emptypb.Empty, error)
 	Subscribe(*SubscriptionStreamRequest, BrokerService_SubscribeServer) error
-	// New RPC for peer notification
 	NotifyPeerConnection(context.Context, *PeerInfo) (*emptypb.Empty, error)
+	ForwardNotification(context.Context, *ForwardedNotification) (*emptypb.Empty, error)
+	Unsubscribe(context.Context, *UnsubscribeRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedBrokerServiceServer()
 }
 
@@ -183,6 +207,12 @@ func (UnimplementedBrokerServiceServer) Subscribe(*SubscriptionStreamRequest, Br
 }
 func (UnimplementedBrokerServiceServer) NotifyPeerConnection(context.Context, *PeerInfo) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NotifyPeerConnection not implemented")
+}
+func (UnimplementedBrokerServiceServer) ForwardNotification(context.Context, *ForwardedNotification) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ForwardNotification not implemented")
+}
+func (UnimplementedBrokerServiceServer) Unsubscribe(context.Context, *UnsubscribeRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Unsubscribe not implemented")
 }
 func (UnimplementedBrokerServiceServer) mustEmbedUnimplementedBrokerServiceServer() {}
 
@@ -326,6 +356,42 @@ func _BrokerService_NotifyPeerConnection_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BrokerService_ForwardNotification_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForwardedNotification)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).ForwardNotification(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_ForwardNotification_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).ForwardNotification(ctx, req.(*ForwardedNotification))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BrokerService_Unsubscribe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnsubscribeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).Unsubscribe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_Unsubscribe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).Unsubscribe(ctx, req.(*UnsubscribeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BrokerService_ServiceDesc is the grpc.ServiceDesc for BrokerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -356,6 +422,14 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "NotifyPeerConnection",
 			Handler:    _BrokerService_NotifyPeerConnection_Handler,
+		},
+		{
+			MethodName: "ForwardNotification",
+			Handler:    _BrokerService_ForwardNotification_Handler,
+		},
+		{
+			MethodName: "Unsubscribe",
+			Handler:    _BrokerService_Unsubscribe_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

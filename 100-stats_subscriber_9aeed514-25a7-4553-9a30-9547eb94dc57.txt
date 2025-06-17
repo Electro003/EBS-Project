@@ -1,0 +1,6 @@
+--- STATS for 9aeed514-25a7-4553-9a30-9547eb94dc57 at 2025-06-17T10:33:08+03:00 ---
+Total simple notifications received: 282512
+Total complex notifications received: 69206
+Average latency: 2.247061ms
+--------------------------------------------------
+

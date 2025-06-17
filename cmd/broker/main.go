@@ -22,36 +22,51 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// brokerServer holds the state for a broker node.
 type brokerServer struct {
 	pb.UnimplementedBrokerServiceServer
-	mu                   sync.RWMutex
-	address              string
-	allBrokerAddresses   []string
-	routingKeyField      string
-	brokerClients        map[string]pb.BrokerServiceClient
-	brokerConnections    map[string]*grpc.ClientConn // Track connections for cleanup
+	mu                 sync.RWMutex
+	address            string
+	allBrokerAddresses []string
+	routingKeyField    string
+	brokerClients      map[string]pb.BrokerServiceClient
+	brokerConnections  map[string]*grpc.ClientConn
+
+	// Stores subscriptions that this broker is the "owner" of.
 	simpleSubscriptions  map[string]*pb.SimpleSubscription
 	complexSubscriptions map[string]*pb.ComplexSubscription
-	windowBuffers        map[string][]*pb.Publication
-	windowSize           int
-	subscriberStreams    map[string]pb.BrokerService_SubscribeServer
+
+	windowBuffers map[string][]*pb.Publication
+	windowSize    int
+
+	// Maps a subscriber ID to the active gRPC stream for that subscriber.
+	// This map only contains subscribers directly connected to THIS broker.
+	subscriberStreams map[string]pb.BrokerService_SubscribeServer
+
+	// Maps a subscriber ID to a list of its subscription IDs.
+	// This is now populated on ALL brokers that hold subscriptions for the subscriber,
+	// not just the origin broker. This enables efficient cleanup.
+	subscriberToSimpleSubs  map[string][]string
+	subscriberToComplexSubs map[string][]string
 }
 
 func newServer(addr string, cfg *config.Config) *brokerServer {
 	s := &brokerServer{
-		address:              addr,
-		allBrokerAddresses:   cfg.BrokerAddresses,
-		routingKeyField:      cfg.RoutingKeyField,
-		brokerClients:        make(map[string]pb.BrokerServiceClient),
-		brokerConnections:    make(map[string]*grpc.ClientConn),
-		simpleSubscriptions:  make(map[string]*pb.SimpleSubscription),
-		complexSubscriptions: make(map[string]*pb.ComplexSubscription),
-		windowBuffers:        make(map[string][]*pb.Publication),
-		windowSize:           cfg.WindowSize,
-		subscriberStreams:    make(map[string]pb.BrokerService_SubscribeServer),
+		address:                 addr,
+		allBrokerAddresses:      cfg.BrokerAddresses,
+		routingKeyField:         cfg.RoutingKeyField,
+		brokerClients:           make(map[string]pb.BrokerServiceClient),
+		brokerConnections:       make(map[string]*grpc.ClientConn),
+		simpleSubscriptions:     make(map[string]*pb.SimpleSubscription),
+		complexSubscriptions:    make(map[string]*pb.ComplexSubscription),
+		windowBuffers:           make(map[string][]*pb.Publication),
+		windowSize:              cfg.WindowSize,
+		subscriberStreams:       make(map[string]pb.BrokerService_SubscribeServer),
+		subscriberToSimpleSubs:  make(map[string][]string),
+		subscriberToComplexSubs: make(map[string][]string),
 	}
+
 	s.connectToPeers()
-	s.startPeerConnectionManager()
 
 	return s
 }
@@ -59,223 +74,233 @@ func newServer(addr string, cfg *config.Config) *brokerServer {
 func (s *brokerServer) connectToPeers() {
 	for _, addr := range s.allBrokerAddresses {
 		if addr == s.address {
-			continue
+			continue // Don't connect to self
 		}
-		s.connectToPeer(addr)
+		go s.managePeerConnection(addr)
 	}
 }
 
-func (s *brokerServer) connectToPeer(addr string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *brokerServer) managePeerConnection(addr string) {
+	for {
+		s.mu.RLock()
+		_, connected := s.brokerClients[addr]
+		s.mu.RUnlock()
 
-	if _, ok := s.brokerClients[addr]; ok {
-		return true
-	}
-
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Printf("[%s] Failed to connect to peer broker %s: %v", s.address, addr, err)
-		return false
-	}
-
-	client := pb.NewBrokerServiceClient(conn)
-	s.brokerClients[addr] = client
-	s.brokerConnections[addr] = conn
-	log.Printf("[%s] Connected to peer broker %s", s.address, addr)
-
-	go s.notifyPeer(addr, client)
-
-	return true
-}
-
-func (s *brokerServer) notifyPeer(peerAddr string, client pb.BrokerServiceClient) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	peerInfo := &pb.PeerInfo{
-		Address:     s.address,
-		ConnectedAt: timestamppb.Now(),
-	}
-
-	_, err := client.NotifyPeerConnection(ctx, peerInfo)
-	if err != nil {
-		log.Printf("[%s] Failed to notify peer %s about connection: %v", s.address, peerAddr, err)
-	} else {
-		log.Printf("[%s] Successfully notified peer %s about connection", s.address, peerAddr)
-	}
-}
-
-func (s *brokerServer) NotifyPeerConnection(ctx context.Context, req *pb.PeerInfo) (*emptypb.Empty, error) {
-	peerAddr := req.Address
-	log.Printf("[%s] Received connection notification from peer %s", s.address, peerAddr)
-
-	s.mu.RLock()
-	_, hasConnection := s.brokerClients[peerAddr]
-	s.mu.RUnlock()
-
-	if !hasConnection {
-		log.Printf("[%s] Establishing reverse connection to peer %s", s.address, peerAddr)
-		s.connectToPeer(peerAddr)
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
-func (s *brokerServer) startPeerConnectionManager() {
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			for _, addr := range s.allBrokerAddresses {
-				if addr == s.address {
-					continue
-				}
-
-				s.mu.RLock()
-				_, connected := s.brokerClients[addr]
-				s.mu.RUnlock()
-
-				if !connected {
-					log.Printf("[%s] Attempting to reconnect to peer %s", s.address, addr)
-					s.connectToPeer(addr)
-				}
+		if !connected {
+			log.Printf("[%s] Attempting to connect to peer %s", s.address, addr)
+			conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+			if err != nil {
+				log.Printf("[%s] Failed to connect to peer %s, will retry: %v", s.address, addr, err)
+				time.Sleep(5 * time.Second) // Wait before retrying
+				continue
 			}
+
+			s.mu.Lock()
+			s.brokerClients[addr] = pb.NewBrokerServiceClient(conn)
+			s.brokerConnections[addr] = conn
+			s.mu.Unlock()
+			log.Printf("[%s] Successfully connected to peer broker %s", s.address, addr)
 		}
-	}()
+		time.Sleep(15 * time.Second)
+	}
 }
 
+// getPeerClient retrieves a gRPC client for a peer, ensuring a connection exists.
 func (s *brokerServer) getPeerClient(addr string) (pb.BrokerServiceClient, error) {
 	s.mu.RLock()
 	client, ok := s.brokerClients[addr]
 	s.mu.RUnlock()
-
-	if ok {
-		return client, nil
+	if !ok {
+		return nil, fmt.Errorf("no connection to peer %s", addr)
 	}
-
-	if s.connectToPeer(addr) {
-		s.mu.RLock()
-		client = s.brokerClients[addr]
-		s.mu.RUnlock()
-		return client, nil
-	}
-
-	return nil, fmt.Errorf("failed to connect to peer %s", addr)
+	return client, nil
 }
 
-// Publish - called only by publisher or another node to the owner broker
+// Publish handles incoming publications from the publisher.
 func (s *brokerServer) Publish(ctx context.Context, pub *pb.Publication) (*emptypb.Empty, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	matchedLocal := 0
+	matchedRemote := 0
 
 	// 1. Match simple subscriptions
 	for _, sub := range s.simpleSubscriptions {
 		if matching.CheckSimpleMatch(pub, sub) {
-			if stream, ok := s.subscriberStreams[sub.SubscriberId]; ok {
-				notif := &pb.Notification{
-					Content:      &pb.Notification_Publication{Publication: pub},
-					DispatchedAt: timestamppb.Now(),
+			notif := &pb.Notification{
+				Content:      &pb.Notification_Publication{Publication: pub},
+				DispatchedAt: timestamppb.Now(),
+			}
+
+			if sub.OriginBroker == s.address {
+				// Subscriber is local, send directly
+				if stream, ok := s.subscriberStreams[sub.SubscriberId]; ok {
+					if err := stream.Send(notif); err == nil {
+						matchedLocal++
+					}
 				}
-				err := stream.Send(notif)
-				if err != nil {
-					log.Printf("[%s] Failed to send notification to subscriber %s: %v",
-						s.address, sub.SubscriberId, err)
-				}
+			} else {
+				// Subscriber is remote, forward to its origin broker
+				matchedRemote++
+				go s.forwardNotificationToBroker(sub.OriginBroker, sub.SubscriberId, notif)
 			}
 		}
 	}
 
-	// 2. Process complex subscriptions (windows)
+	// 2. Process complex subscriptions (window-based)
 	for _, sub := range s.complexSubscriptions {
 		if pub.City == sub.IdentityConstraint.Value.GetStringValue() {
 			identityKey := fmt.Sprintf("%s:%s", sub.IdentityConstraint.Field, pub.City)
+
+			s.mu.RUnlock() // Release read lock to acquire write lock
+			s.mu.Lock()
 			s.windowBuffers[identityKey] = append(s.windowBuffers[identityKey], pub)
 
+			var windowToProcess []*pb.Publication
 			if len(s.windowBuffers[identityKey]) == s.windowSize {
-				window := s.windowBuffers[identityKey]
-				if ok, msg := matching.CheckWindowMatch(window, sub); ok {
-					if stream, ok := s.subscriberStreams[sub.SubscriberId]; ok {
-						metaPub := &pb.MetaPublication{City: pub.City, Message: msg}
-						notif := &pb.Notification{
-							Content:      &pb.Notification_MetaPublication{MetaPublication: metaPub},
-							DispatchedAt: timestamppb.Now(),
+				windowToProcess = s.windowBuffers[identityKey]
+				delete(s.windowBuffers, identityKey) // Tumbling window
+			}
+			s.mu.Unlock()
+			s.mu.RLock()
+
+			if windowToProcess != nil {
+				if ok, msg := matching.CheckWindowMatch(windowToProcess, sub); ok {
+					metaPub := &pb.MetaPublication{City: pub.City, Message: msg}
+					notif := &pb.Notification{
+						Content:      &pb.Notification_MetaPublication{MetaPublication: metaPub},
+						DispatchedAt: timestamppb.Now(),
+					}
+
+					if sub.OriginBroker == s.address {
+						if stream, ok := s.subscriberStreams[sub.SubscriberId]; ok {
+							stream.Send(notif)
 						}
-						err := stream.Send(notif)
-						if err != nil {
-							log.Printf("[%s] Failed to send meta notification to subscriber %s: %v",
-								s.address, sub.SubscriberId, err)
-						}
+					} else {
+						go s.forwardNotificationToBroker(sub.OriginBroker, sub.SubscriberId, notif)
 					}
 				}
-				delete(s.windowBuffers, identityKey)
 			}
 		}
 	}
 
+	if matchedLocal > 0 || matchedRemote > 0 {
+		log.Printf("[%s] Publication for %s matched %d local and %d remote subscriptions",
+			s.address, pub.City, matchedLocal, matchedRemote)
+	}
+
 	return &emptypb.Empty{}, nil
 }
 
-func (s *brokerServer) RegisterSimpleSubscription(ctx context.Context, sub *pb.SimpleSubscription) (*emptypb.Empty, error) {
-	if len(sub.Constraints) == 0 {
-		return &emptypb.Empty{}, nil
+// forwardNotificationToBroker sends a matched notification to a subscriber's origin broker.
+func (s *brokerServer) forwardNotificationToBroker(originBroker, subscriberId string, notif *pb.Notification) {
+	client, err := s.getPeerClient(originBroker)
+	if err != nil {
+		log.Printf("[%s] Failed to get client for origin broker %s: %v", s.address, originBroker, err)
+		return
 	}
 
-	key := sub.Constraints[0].Value.GetStringValue()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = client.ForwardNotification(ctx, &pb.ForwardedNotification{
+		SubscriberId: subscriberId,
+		Notification: notif,
+	})
+
+	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
+			log.Printf("[%s] Subscriber %s not found on origin broker %s. Triggering reactive cleanup.", s.address, subscriberId, originBroker)
+			s.cleanupRemoteSubscriber(subscriberId)
+		} else {
+			log.Printf("[%s] Failed to forward notification to broker %s for subscriber %s: %v",
+				s.address, originBroker, subscriberId, err)
+		}
+	}
+}
+
+// ForwardNotification is the RPC handler for receiving a forwarded notification from an owner broker.
+func (s *brokerServer) ForwardNotification(ctx context.Context, req *pb.ForwardedNotification) (*emptypb.Empty, error) {
+	s.mu.RLock()
+	stream, ok := s.subscriberStreams[req.SubscriberId]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "subscriber %s not found", req.SubscriberId)
+	}
+
+	if err := stream.Send(req.Notification); err != nil {
+		log.Printf("[%s] Failed to send forwarded notification to subscriber %s: %v",
+			s.address, req.SubscriberId, err)
+		return nil, status.Errorf(codes.Internal, "failed to send notification: %v", err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+// RegisterSimpleSubscription handles a subscription request from a client.
+func (s *brokerServer) RegisterSimpleSubscription(ctx context.Context, sub *pb.SimpleSubscription) (*emptypb.Empty, error) {
+	key := sub.Constraints[0].Value.GetStringValue() // Assuming city is always the first constraint for routing
 	ownerAddr := routing.GetOwnerNode(key, s.allBrokerAddresses)
 
+	sub.OriginBroker = s.address // Tag the subscription with its origin
+
 	if ownerAddr == s.address {
-		s.ForwardSimpleSubscription(ctx, sub)
-	} else {
-		client, err := s.getPeerClient(ownerAddr)
-		if err != nil {
-			log.Printf("[%s] Failed to forward simple subscription to %s: %v", s.address, ownerAddr, err)
-			return nil, status.Errorf(codes.Unavailable, "failed to connect to owner broker: %v", err)
-		}
-		_, err = client.ForwardSimpleSubscription(ctx, sub)
-		if err != nil {
-			log.Printf("[%s] Failed to forward simple subscription to %s: %v", s.address, ownerAddr, err)
-			return nil, err
-		}
+		return s.ForwardSimpleSubscription(ctx, sub)
 	}
+
+	client, err := s.getPeerClient(ownerAddr)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to get client for owner broker %s: %v", ownerAddr, err)
+	}
+
+	_, err = client.ForwardSimpleSubscription(ctx, sub)
+	return &emptypb.Empty{}, err
+}
+
+// ForwardSimpleSubscription stores a subscription for which this broker is the owner.
+func (s *brokerServer) ForwardSimpleSubscription(ctx context.Context, sub *pb.SimpleSubscription) (*emptypb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.simpleSubscriptions[sub.SubscriptionId] = sub
+	s.subscriberToSimpleSubs[sub.SubscriberId] = append(s.subscriberToSimpleSubs[sub.SubscriberId], sub.SubscriptionId)
+
+	log.Printf("[%s] Stored simple subscription %s for subscriber %s (origin: %s)",
+		s.address, sub.SubscriptionId, sub.SubscriberId, sub.OriginBroker)
 	return &emptypb.Empty{}, nil
 }
 
+// RegisterComplexSubscription handles a subscription request from a client.
 func (s *brokerServer) RegisterComplexSubscription(ctx context.Context, sub *pb.ComplexSubscription) (*emptypb.Empty, error) {
 	key := sub.IdentityConstraint.Value.GetStringValue()
 	ownerAddr := routing.GetOwnerNode(key, s.allBrokerAddresses)
 
+	sub.OriginBroker = s.address
+
 	if ownerAddr == s.address {
-		s.ForwardComplexSubscription(ctx, sub)
-	} else {
-		client, err := s.getPeerClient(ownerAddr)
-		if err != nil {
-			log.Printf("[%s] Failed to forward complex subscription to %s: %v", s.address, ownerAddr, err)
-			return nil, status.Errorf(codes.Unavailable, "failed to connect to owner broker: %v", err)
-		}
-		_, err = client.ForwardComplexSubscription(ctx, sub)
-		if err != nil {
-			log.Printf("[%s] Failed to forward complex subscription to %s: %v", s.address, ownerAddr, err)
-			return nil, err
-		}
+		return s.ForwardComplexSubscription(ctx, sub)
 	}
-	return &emptypb.Empty{}, nil
+
+	client, err := s.getPeerClient(ownerAddr)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to connect to owner broker %s: %v", ownerAddr, err)
+	}
+
+	_, err = client.ForwardComplexSubscription(ctx, sub)
+	return &emptypb.Empty{}, err
 }
 
-func (s *brokerServer) ForwardSimpleSubscription(ctx context.Context, sub *pb.SimpleSubscription) (*emptypb.Empty, error) {
-	s.mu.Lock()
-	s.simpleSubscriptions[sub.SubscriptionId] = sub
-	s.mu.Unlock()
-	log.Printf("[%s] Stored simple subscription %s", s.address, sub.SubscriptionId)
-	return &emptypb.Empty{}, nil
-}
-
+// ForwardComplexSubscription stores a subscription for which this broker is the owner.
 func (s *brokerServer) ForwardComplexSubscription(ctx context.Context, sub *pb.ComplexSubscription) (*emptypb.Empty, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.complexSubscriptions[sub.SubscriptionId] = sub
-	s.mu.Unlock()
-	log.Printf("[%s] Stored complex subscription %s", s.address, sub.SubscriptionId)
+	s.subscriberToComplexSubs[sub.SubscriberId] = append(s.subscriberToComplexSubs[sub.SubscriberId], sub.SubscriptionId)
+
+	log.Printf("[%s] Stored complex subscription %s for subscriber %s (origin: %s)",
+		s.address, sub.SubscriptionId, sub.SubscriberId, sub.OriginBroker)
 	return &emptypb.Empty{}, nil
 }
 
@@ -284,7 +309,7 @@ func (s *brokerServer) Subscribe(req *pb.SubscriptionStreamRequest, stream pb.Br
 	s.subscriberStreams[req.SubscriberId] = stream
 	s.mu.Unlock()
 
-	log.Printf("[%s] Subscriber %s connected.", s.address, req.SubscriberId)
+	log.Printf("[%s] Subscriber %s connected and stream established", s.address, req.SubscriberId)
 
 	<-stream.Context().Done()
 
@@ -293,19 +318,59 @@ func (s *brokerServer) Subscribe(req *pb.SubscriptionStreamRequest, stream pb.Br
 	s.mu.Unlock()
 
 	log.Printf("[%s] Subscriber %s disconnected.", s.address, req.SubscriberId)
+
+	// PROACTIVE CLEANUP: Notify all other brokers that this subscriber is gone.
+	s.cleanupLocalSubscriberAndNotifyPeers(req.SubscriberId)
+
 	return nil
 }
 
-// Cleanup connections on shutdown
-func (s *brokerServer) cleanup() {
+func (s *brokerServer) cleanupLocalSubscriberAndNotifyPeers(subscriberId string) {
+	log.Printf("[%s] Broadcasting unsubscribe request for disconnected subscriber %s", s.address, subscriberId)
+
+	req := &pb.UnsubscribeRequest{SubscriberId: subscriberId}
+
+	s.mu.RLock()
+	peers := s.brokerClients
+	s.mu.RUnlock()
+
+	for peerAddr, client := range peers {
+		go func(addr string, c pb.BrokerServiceClient) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := c.Unsubscribe(ctx, req); err != nil {
+				log.Printf("[%s] Failed to send unsubscribe request to peer %s: %v", s.address, addr, err)
+			}
+		}(peerAddr, client)
+	}
+}
+
+func (s *brokerServer) Unsubscribe(ctx context.Context, req *pb.UnsubscribeRequest) (*emptypb.Empty, error) {
+	log.Printf("[%s] Received unsubscribe request for subscriber %s", s.address, req.SubscriberId)
+	s.cleanupRemoteSubscriber(req.SubscriberId)
+	return &emptypb.Empty{}, nil
+}
+
+func (s *brokerServer) cleanupRemoteSubscriber(subscriberId string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for addr, conn := range s.brokerConnections {
-		err := conn.Close()
-		if err != nil {
-			log.Printf("[%s] Error closing connection to %s: %v", s.address, addr, err)
+	simpleSubIds, okSimple := s.subscriberToSimpleSubs[subscriberId]
+	if okSimple {
+		for _, subId := range simpleSubIds {
+			delete(s.simpleSubscriptions, subId)
 		}
+		delete(s.subscriberToSimpleSubs, subscriberId)
+		log.Printf("[%s] Cleaned up %d simple subscriptions for subscriber %s.", s.address, len(simpleSubIds), subscriberId)
+	}
+
+	complexSubIds, okComplex := s.subscriberToComplexSubs[subscriberId]
+	if okComplex {
+		for _, subId := range complexSubIds {
+			delete(s.complexSubscriptions, subId)
+		}
+		delete(s.subscriberToComplexSubs, subscriberId)
+		log.Printf("[%s] Cleaned up %d complex subscriptions for subscriber %s.", s.address, len(complexSubIds), subscriberId)
 	}
 }
 
@@ -331,9 +396,6 @@ func main() {
 	pb.RegisterBrokerServiceServer(grpcServer, broker)
 
 	log.Printf("Broker server listening at %v", lis.Addr())
-
-	// Handle graceful shutdown
-	defer broker.cleanup()
 
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)

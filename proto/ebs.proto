@@ -36,6 +36,7 @@ message SimpleSubscription {
   string subscription_id = 1;
   string subscriber_id = 2;
   repeated Constraint constraints = 3;
+  string origin_broker = 4;
 }
 
 message ComplexSubscription {
@@ -43,6 +44,7 @@ message ComplexSubscription {
   string subscriber_id = 2;
   Constraint identity_constraint = 3;
   repeated Constraint aggregate_constraints = 4;
+  string origin_broker = 5;
 }
 
 message MetaPublication {
@@ -62,10 +64,18 @@ message SubscriptionStreamRequest {
     string subscriber_id = 1;
 }
 
-// New message for peer connection
 message PeerInfo {
     string address = 1;
     google.protobuf.Timestamp connected_at = 2;
+}
+
+message ForwardedNotification {
+    string subscriber_id = 1;
+    Notification notification = 2;
+}
+
+message UnsubscribeRequest {
+    string subscriber_id = 1;
 }
 
 service BrokerService {
@@ -80,4 +90,7 @@ service BrokerService {
   rpc Subscribe(SubscriptionStreamRequest) returns (stream Notification) {}
   
   rpc NotifyPeerConnection(PeerInfo) returns (google.protobuf.Empty) {}
+  
+  rpc ForwardNotification(ForwardedNotification) returns (google.protobuf.Empty) {}
+  rpc Unsubscribe(UnsubscribeRequest) returns (google.protobuf.Empty) {}
 }

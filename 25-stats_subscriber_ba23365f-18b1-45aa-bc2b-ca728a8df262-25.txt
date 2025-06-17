@@ -1,0 +1,6 @@
+--- STATS for ba23365f-18b1-45aa-bc2b-ca728a8df262 at 2025-06-17T10:39:04+03:00 ---
+Total simple notifications received: 482881
+Total complex notifications received: 75021
+Average latency: 2.653705ms
+--------------------------------------------------
+

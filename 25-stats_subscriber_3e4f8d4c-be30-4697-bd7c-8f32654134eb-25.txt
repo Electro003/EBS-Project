@@ -1,0 +1,6 @@
+--- STATS for 3e4f8d4c-be30-4697-bd7c-8f32654134eb at 2025-06-17T10:39:07+03:00 ---
+Total simple notifications received: 531029
+Total complex notifications received: 82160
+Average latency: 2.399559ms
+--------------------------------------------------
+
